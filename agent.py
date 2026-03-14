@@ -41,13 +41,22 @@ Available tools:
 - query_api: Call the backend API
 
 Tool selection strategy:
-1. For documentation questions (how-to, workflows, concepts) → use list_files and read_file on wiki/
-2. For data questions (how many items, scores, analytics) → use query_api
-3. For system questions (framework, ports, endpoints) → use read_file on source code or query_api
-4. For bug diagnosis → use read_file on relevant source files
+1. For documentation questions (how-to, workflows, concepts, Docker, git) → use list_files to find relevant wiki files, then read_file
+2. For data questions (how many items, learners, scores, analytics) → use query_api with GET /items/, GET /learners/, GET /analytics/...
+3. For system questions (framework, ports, endpoints, Dockerfile) → use read_file on backend/ source code, Dockerfile, docker-compose.yml
+4. For bug diagnosis → use read_file on relevant source files (e.g., backend/app/routers/analytics.py for analytics bugs)
+5. For code comparison questions → use read_file on multiple files and compare their approaches
+
+When asked about:
+- Branch protection, merge conflicts, git workflows → read wiki/git.md or wiki/git-workflow.md
+- Docker cleanup, volumes, containers → read wiki/docker.md or wiki/docker-compose.md
+- Backend framework → read backend/app/main.py or pyproject.toml for dependencies
+- Analytics bugs → read backend/app/routers/analytics.py and look for division operations, None-unsafe calls, sorting issues
+- ETL vs API error handling → read both backend/app/routers/*.py and backend/app/etl.py
 
 Always provide accurate source references when using wiki or code files.
 For API queries, include the endpoint path in your answer.
+For bug findings, quote the specific line number or code snippet.
 """
 
 # Tool definitions for OpenAI function calling
