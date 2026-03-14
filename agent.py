@@ -49,14 +49,20 @@ Tool selection strategy:
 
 When asked about:
 - Branch protection, merge conflicts, git workflows → read wiki/git.md or wiki/git-workflow.md
-- Docker cleanup, volumes, containers → read wiki/docker.md or wiki/docker-compose.md
+- Docker cleanup, Docker volumes, Docker containers, pruning → read wiki/docker.md (look for "Clean up" section)
 - Backend framework → read backend/app/main.py or pyproject.toml for dependencies
-- Analytics bugs → read backend/app/routers/analytics.py and look for division operations, None-unsafe calls, sorting issues
-- ETL vs API error handling → read both backend/app/routers/*.py and backend/app/etl.py
+- Analytics bugs, division errors, None handling → read backend/app/routers/analytics.py and look for:
+  * Division operations (check for division by zero)
+  * None-unsafe operations
+  * Sorting with potentially None values
+- ETL vs API error handling, failure strategies → read both backend/app/etl.py AND backend/app/main.py (for exception handlers)
+- Dockerfile techniques (multi-stage builds, keeping image small) → read Dockerfile in project root
+- Learner count, distinct learners → use query_api with GET /learners/
 
 Always provide accurate source references when using wiki or code files.
 For API queries, include the endpoint path in your answer.
 For bug findings, quote the specific line number or code snippet.
+For comparison questions, read ALL relevant files before answering.
 """
 
 # Tool definitions for OpenAI function calling
