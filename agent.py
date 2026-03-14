@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agent.py — CLI agent with tools and agentic loop for wiki-based Q&A.
+agent.py — CLI agent with tools (read_file, list_files, query_api) and agentic loop.
 """
 
 import json
@@ -8,12 +8,17 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Load env vars from .env.agent.secret
-env_path = Path(__file__).parent / ".env.agent.secret"
-load_dotenv(env_path)
+# Load LLM env vars from .env.agent.secret
+llm_env_path = Path(__file__).parent / ".env.agent.secret"
+load_dotenv(llm_env_path, override=False)
+
+# Load LMS env vars from .env.docker.secret
+lms_env_path = Path(__file__).parent / ".env.docker.secret"
+load_dotenv(lms_env_path, override=False)
 
 # Initialize LLM client
 client = OpenAI(
@@ -22,18 +27,27 @@ client = OpenAI(
 )
 
 MODEL = os.getenv("LLM_MODEL", "qwen3-coder-plus")
-SYSTEM_PROMPT = """You are a helpful assistant that answers questions using the project wiki.
+LMS_API_KEY = os.getenv("LMS_API_KEY", "")
+AGENT_API_BASE_URL = os.getenv("AGENT_API_BASE_URL", "http://localhost:42002")
 
-You have access to these tools:
+SYSTEM_PROMPT = """You are a helpful assistant that answers questions using:
+- The project wiki (for documentation)
+- The backend API (for live data)
+- Source code files (for implementation details)
+
+Available tools:
 - list_files: List files in a directory
 - read_file: Read the contents of a file
+- query_api: Call the backend API
 
-Strategy:
-1. Use list_files to explore the wiki directory
-2. Use read_file to find relevant information
-3. Include the source file path and section in your answer
+Tool selection strategy:
+1. For documentation questions (how-to, workflows, concepts) → use list_files and read_file on wiki/
+2. For data questions (how many items, scores, analytics) → use query_api
+3. For system questions (framework, ports, endpoints) → use read_file on source code or query_api
+4. For bug diagnosis → use read_file on relevant source files
 
-Always provide accurate source references (e.g., wiki/git-workflow.md#resolving-merge-conflicts).
+Always provide accurate source references when using wiki or code files.
+For API queries, include the endpoint path in your answer.
 """
 
 # Tool definitions for OpenAI function calling
@@ -69,6 +83,31 @@ TOOLS = [
                     }
                 },
                 "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_api",
+            "description": "Call the backend API to fetch data or perform actions. Use for questions about database content, analytics, or system status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method (GET, POST, PUT, DELETE)"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "API endpoint path (e.g., /items/, /analytics/scores)"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "JSON request body (optional, for POST/PUT)"
+                    }
+                },
+                "required": ["method", "path"]
             }
         }
     }
@@ -146,6 +185,63 @@ def list_files(path: str) -> str:
         return f"Error listing directory: {e}"
 
 
+def query_api(method: str, path: str, body: str = None) -> str:
+    """Call the backend API with authentication."""
+    # Validate path
+    if ".." in path or not path.startswith("/"):
+        return json.dumps({
+            "status_code": 400,
+            "body": "Error: Invalid path. Must start with / and no ..",
+        })
+    
+    # Validate method
+    allowed_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+    if method.upper() not in allowed_methods:
+        return json.dumps({
+            "status_code": 400,
+            "body": f"Error: Invalid method. Use one of: {', '.join(allowed_methods)}",
+        })
+    
+    url = f"{AGENT_API_BASE_URL}{path}"
+    headers = {"Authorization": f"Bearer {LMS_API_KEY}"}
+    
+    log_debug(f"Calling API: {method} {url}")
+    
+    try:
+        if body:
+            headers["Content-Type"] = "application/json"
+            response = httpx.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json.loads(body),
+                timeout=30,
+            )
+        else:
+            response = httpx.request(
+                method=method,
+                url=url,
+                headers=headers,
+                timeout=30,
+            )
+        
+        result = {
+            "status_code": response.status_code,
+            "body": response.text,
+        }
+        return json.dumps(result)
+    except httpx.RequestError as e:
+        return json.dumps({
+            "status_code": 0,
+            "body": f"Request error: {str(e)}",
+        })
+    except json.JSONDecodeError as e:
+        return json.dumps({
+            "status_code": 400,
+            "body": f"Invalid JSON body: {str(e)}",
+        })
+
+
 def execute_tool(tool_name: str, args: dict) -> str:
     """Execute a tool and return the result."""
     log_debug(f"Executing tool: {tool_name} with args: {args}")
@@ -154,6 +250,12 @@ def execute_tool(tool_name: str, args: dict) -> str:
         return read_file(args.get("path", ""))
     elif tool_name == "list_files":
         return list_files(args.get("path", ""))
+    elif tool_name == "query_api":
+        return query_api(
+            args.get("method", "GET"),
+            args.get("path", ""),
+            args.get("body"),
+        )
     else:
         return f"Error: Unknown tool: {tool_name}"
 
@@ -224,7 +326,7 @@ def run_agentic_loop(question: str) -> dict:
                 tool_calls_log.append({
                     "tool": tool_name,
                     "args": args,
-                    "result": result,
+                    "result": result[:500] if len(result) > 500 else result,  # Truncate long results
                 })
                 
                 log_debug(f"Tool {tool_name} result: {result[:100]}...")
@@ -239,13 +341,13 @@ def run_agentic_loop(question: str) -> dict:
             # Continue loop - LLM will process tool results
         else:
             # LLM provided final answer
-            answer = response.content.strip()
+            answer = response.content.strip() if response.content else ""
             log_debug(f"Final answer: {answer[:100]}...")
             
-            # Extract source from answer (look for wiki/...md#... pattern)
+            # Extract source from answer (look for wiki/...md#... or backend/...py patterns)
             source = ""
             import re
-            source_match = re.search(r'(wiki/[\w-]+\.md(?:#[\w-]+)?)', answer)
+            source_match = re.search(r'(wiki/[\w-]+\.md(?:#[\w-]+)?|backend/[\w_/]+\.py)', answer)
             if source_match:
                 source = source_match.group(1)
             
@@ -266,7 +368,7 @@ def run_agentic_loop(question: str) -> dict:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: uv run agent.py \"Your question here\"", file=sys.stderr)
+        print("Usage: python agent.py \"Your question here\"", file=sys.stderr)
         sys.exit(1)
 
     question = sys.argv[1]
