@@ -358,14 +358,28 @@ def run_agentic_loop(question: str) -> dict:
             # LLM provided final answer
             answer = response.content.strip() if response.content else ""
             log_debug(f"Final answer: {answer[:100]}...")
-            
+
             # Extract source from answer (look for wiki/...md#... or backend/...py patterns)
             source = ""
             import re
+            # Try multiple patterns: wiki/file.md, backend/file.py, or just file.md in context
             source_match = re.search(r'(wiki/[\w-]+\.md(?:#[\w-]+)?|backend/[\w_/]+\.py)', answer)
             if source_match:
                 source = source_match.group(1)
-            
+            elif 'wiki' in answer.lower() and '.md' in answer:
+                # Try to find just the filename if wiki/ is mentioned
+                md_match = re.search(r'([\w-]+\.md)', answer)
+                if md_match:
+                    source = f"wiki/{md_match.group(1)}"
+            elif not source and tool_calls_log:
+                # Extract from last read_file tool call if no source found in answer
+                for tc in reversed(tool_calls_log):
+                    if tc['tool'] == 'read_file':
+                        path = tc['args'].get('path', '')
+                        if path.startswith('wiki/') or path.startswith('backend/'):
+                            source = path
+                            break
+
             return {
                 "answer": answer,
                 "source": source,
